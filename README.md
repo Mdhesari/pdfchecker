@@ -14,7 +14,7 @@ go get github.com/mdhesari/pdfchecker
 import "github.com/mdhesari/pdfchecker"
 
 // Check if PDF is valid
-ok, err := pdfchecker.Check([]byte{...})
+err := pdfchecker.Check([]byte{...})
 ```
 
 ## What it does
