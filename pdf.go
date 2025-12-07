@@ -111,15 +111,11 @@ func checkForForms(content string) error {
 // checkForExternalReferences detects external references in PDF
 func checkForExternalReferences(content string) error {
 	externalPatterns := []string{
-		`/URI`,
 		`/GoToR`,
 		`/Launch`,
 		`/ImportData`,
 		`/SubmitForm`,
-		`http://`,
-		`https://`,
 		`ftp://`,
-		`file://`,
 	}
 
 	contentLower := strings.ToLower(content)
