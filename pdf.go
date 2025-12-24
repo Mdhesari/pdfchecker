@@ -7,7 +7,7 @@ import (
 )
 
 // Version is the current semantic version of the pdfchecker package.
-const Version = "0.1.5"
+const Version = "0.1.6"
 
 var (
 	ErrMaliciousPDF         = errors.New("PDF contains potentially malicious content")
