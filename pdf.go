@@ -4,19 +4,78 @@ import (
 	"bytes"
 	"errors"
 	"regexp"
-	"strings"
 )
 
-const (
-	VERSION = "0.1.3"
-)
+// Version is the current semantic version of the pdfchecker package.
+const Version = "0.1.3"
 
 var (
-	ErrMaliciousPDF        = errors.New("PDF contains potentially malicious content")
-	ErrInvalidPDFStructure = errors.New("invalid PDF structure")
-	ErrJavaScriptDetected  = errors.New("JavaScript detected in PDF")
-	ErrFormDetected        = errors.New("interactive forms detected in PDF")
-	ErrExternalRefDetected = errors.New("external references detected in PDF")
+	ErrMaliciousPDF         = errors.New("PDF contains potentially malicious content")
+	ErrInvalidPDFStructure  = errors.New("invalid PDF structure")
+	ErrJavaScriptDetected   = errors.New("JavaScript detected in PDF")
+	ErrFormDetected         = errors.New("interactive forms detected in PDF")
+	ErrExternalRefDetected  = errors.New("external references detected in PDF")
+	ErrEmbeddedFileDetected = errors.New("embedded files detected in PDF")
+)
+
+// Precompiled regular expressions used for detection to avoid repeated compilation
+var (
+	whitespaceRegex = regexp.MustCompile(`\s+`)
+
+	jsPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)/\s*JavaScript`),
+		regexp.MustCompile(`(?i)/\s*JS`),
+		regexp.MustCompile(`(?i)/\s*OpenAction`),
+		regexp.MustCompile(`(?i)app\s*\.`),
+		regexp.MustCompile(`(?i)eval\s*\(`),
+		regexp.MustCompile(`(?i)document\s*\.`),
+		regexp.MustCompile(`(?i)this\s*\.`),
+		regexp.MustCompile(`(?i)getField\s*\(`),
+		regexp.MustCompile(`(?i)submitForm\s*\(`),
+		regexp.MustCompile(`(?i)importDataObject\s*\(`),
+		// Direct hex-obfuscated JS inside JS() calls
+		regexp.MustCompile(`(?i)JS\(\s*#(?:[0-9A-Fa-f]{2,})+`),
+	}
+
+	jsHexRx     = regexp.MustCompile(`#(?:[0-9A-Fa-f]{2}){4,}`)
+	jsHexAngle  = regexp.MustCompile(`<([0-9A-Fa-f]{4,})>`)
+	jsWordRegex = regexp.MustCompile(`(?i)javascript|js`)
+
+	formPatternsRegex = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)/\s*AcroForm`),
+		regexp.MustCompile(`(?i)/\s*XFA`),
+		regexp.MustCompile(`(?i)/\s*Widget`),
+		regexp.MustCompile(`(?i)/\s*FT\s*/\s*Tx`),
+		regexp.MustCompile(`(?i)/\s*FT\s*/\s*Ch`),
+		regexp.MustCompile(`(?i)/\s*FT\s*/\s*Btn`),
+		regexp.MustCompile(`(?i)/\s*FT\s*/\s*Sig`),
+	}
+
+	externalRegexes = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)/\s*GoToR`),
+		regexp.MustCompile(`(?i)/\s*Launch`),
+		regexp.MustCompile(`(?i)/\s*ImportData`),
+		regexp.MustCompile(`(?i)/\s*SubmitForm`),
+		regexp.MustCompile(`(?i)/\s*URI\b`),
+		regexp.MustCompile(`(?i)URI\s*\(`),
+		regexp.MustCompile(`(?i)\bhttps?://`),
+		regexp.MustCompile(`(?i)\bfile://`),
+		regexp.MustCompile(`(?i)\bftp://`),
+	}
+
+	embeddedFilesRegex = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)/\s*EmbeddedFile`),
+		regexp.MustCompile(`(?i)/\s*FileAttachment`),
+		regexp.MustCompile(`(?i)/\s*Filespec`),
+	}
+
+	jsRemovalRegexes = []*regexp.Regexp{
+		// Remove common JavaScript markers and simple JS() contents
+		regexp.MustCompile(`(?i)/\s*S\s*/\s*JavaScript`),
+		regexp.MustCompile(`(?is)/\s*JS\s*\([^)]*\)`),
+		regexp.MustCompile(`(?i)/\s*JS`),
+		regexp.MustCompile(`(?i)/\s*OpenAction`),
+	}
 )
 
 // Check performs comprehensive security validation on PDF content
@@ -25,8 +84,12 @@ func Check(data []byte) error {
 		return ErrInvalidPDFStructure
 	}
 
-	// Check PDF header
-	if !bytes.HasPrefix(data, []byte("%PDF-")) {
+	// Check PDF header: allow header to appear within the first 1024 bytes (some files have leading garbage)
+	limit := 1024
+	if len(data) < limit {
+		limit = len(data)
+	}
+	if !bytes.Contains(data[:limit], []byte("%PDF-")) {
 		return ErrInvalidPDFStructure
 	}
 
@@ -57,28 +120,32 @@ func Check(data []byte) error {
 
 // checkForJavaScript detects JavaScript content in PDF
 func checkForJavaScript(content string) error {
-	jsPatterns := []string{
-		`/\s*JavaScript`,
-		`/\s*JS`,
-		`/\s*OpenAction`,
-		`app\s*\.`,
-		`eval\s*\(`,
-		`document\s*\.`,
-		`this\s*\.`,
-		`getField\s*\(`,
-		`submitForm\s*\(`,
-		`importDataObject\s*\(`,
-	}
+	// Normalize whitespace to reduce obfuscation via spacing
+	normalized := whitespaceRegex.ReplaceAllString(content, " ")
 
-	// Remove extra whitespace and normalize content
-	normalizedContent := regexp.MustCompile(`\s+`).ReplaceAllString(content, " ")
-	contentLower := strings.ToLower(normalizedContent)
-
-	for _, pattern := range jsPatterns {
-		matched, _ := regexp.MatchString(strings.ToLower(pattern), contentLower)
-		if matched {
+	for _, rx := range jsPatterns {
+		if rx.MatchString(normalized) {
 			return ErrJavaScriptDetected
 		}
+	}
+
+	// Detect hex-encoded JS fragments (#...) and look for nearby JS markers
+	locs := jsHexRx.FindAllStringIndex(content, -1)
+	for _, loc := range locs {
+		start := loc[0]
+		from := start - 80
+		if from < 0 {
+			from = 0
+		}
+		ctx := content[from:start]
+		if jsWordRegex.MatchString(ctx) {
+			return ErrJavaScriptDetected
+		}
+	}
+
+	// Angle-bracket hex objects + presence of JS tokens
+	if jsHexAngle.MatchString(content) && jsWordRegex.MatchString(content) {
+		return ErrJavaScriptDetected
 	}
 
 	return nil
@@ -86,21 +153,8 @@ func checkForJavaScript(content string) error {
 
 // checkForForms detects interactive forms in PDF
 func checkForForms(content string) error {
-	formPatterns := []string{
-		`/AcroForm`,
-		`/XFA`,
-		`/Widget`,
-		`/Tx`,
-		`/Ch`,
-		`/Btn`,
-		`/Sig`,
-	}
-
-	contentLower := strings.ToLower(content)
-
-	for _, pattern := range formPatterns {
-		matched, _ := regexp.MatchString(strings.ToLower(pattern), contentLower)
-		if matched {
+	for _, rx := range formPatternsRegex {
+		if rx.MatchString(content) {
 			return ErrFormDetected
 		}
 	}
@@ -110,18 +164,11 @@ func checkForForms(content string) error {
 
 // checkForExternalReferences detects external references in PDF
 func checkForExternalReferences(content string) error {
-	externalPatterns := []string{
-		`/GoToR`,
-		`/Launch`,
-		`/ImportData`,
-		`/SubmitForm`,
-		`ftp://`,
-	}
+	// Normalize whitespace to reduce obfuscation
+	normalized := whitespaceRegex.ReplaceAllString(content, " ")
 
-	contentLower := strings.ToLower(content)
-
-	for _, pattern := range externalPatterns {
-		if strings.Contains(contentLower, strings.ToLower(pattern)) {
+	for _, rx := range externalRegexes {
+		if rx.MatchString(normalized) {
 			return ErrExternalRefDetected
 		}
 	}
@@ -131,40 +178,15 @@ func checkForExternalReferences(content string) error {
 
 // checkForEmbeddedFiles detects embedded files in PDF
 func checkForEmbeddedFiles(content string) error {
-	embeddedPatterns := []string{
-		`/EmbeddedFile`,
-		`/FileAttachment`,
-		`/Filespec`,
-	}
-
-	contentLower := strings.ToLower(content)
-
-	for _, pattern := range embeddedPatterns {
-		matched, _ := regexp.MatchString(strings.ToLower(pattern), contentLower)
-		if matched {
-			return errors.New("embedded files detected in PDF")
+	for _, rx := range embeddedFilesRegex {
+		if rx.MatchString(content) {
+			return ErrEmbeddedFileDetected
 		}
 	}
 
 	return nil
 }
 
-// SanitizePDF removes potentially dangerous content from PDF (basic implementation)
-func SanitizePDF(data []byte) ([]byte, error) {
-	// This is a basic implementation - in production, you'd want a more sophisticated approach
-	content := string(data)
-
-	// Remove JavaScript actions
-	jsRemovalPatterns := []string{
-		`/JavaScript[^>]*?>.*?</`,
-		`/JS[^>]*?>.*?</`,
-		`/OpenAction[^>]*?>.*?</`,
-	}
-
-	for _, pattern := range jsRemovalPatterns {
-		re := regexp.MustCompile(pattern)
-		content = re.ReplaceAllString(content, "")
-	}
-
-	return []byte(content), nil
-}
+// Note: sanitization via regex-based replacement was removed because it is
+// unsafe and can corrupt PDFs; prefer a parser-based approach to perform
+// object-level sanitization when needed.

@@ -1,0 +1,15 @@
+run:
+  timeout: 5m
+linters:
+  enable:
+    - staticcheck
+    - govet
+    - revive
+    - errcheck
+    - gocyclo
+    - gofmt
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gocyclo

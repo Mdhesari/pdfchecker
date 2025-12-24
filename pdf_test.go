@@ -19,6 +19,12 @@ func TestPDFValidator_Check(t *testing.T) {
 			description: "Clean PDF should pass validation",
 		},
 		{
+			name:        "PDF header after some leading bytes",
+			pdfContent:  "garbagegarbage%PDF-1.4\n1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n",
+			expectError: false,
+			description: "PDF header within first 1KB should be accepted",
+		},
+		{
 			name:        "PDF with JavaScript - /JavaScript",
 			pdfContent:  "%PDF-1.4\n1 0 obj\n<</Type/Catalog/Pages 2 0 R/JavaScript 3 0 R>>\nendobj\n",
 			expectError: true,
@@ -211,6 +217,7 @@ func TestPDFValidator_Check(t *testing.T) {
 			name:        "PDF with embedded file",
 			pdfContent:  "%PDF-1.4\n1 0 obj\n<</Type/Filespec/F(embedded.exe)/EF<</F 2 0 R>>>>\nendobj\n2 0 obj\n<</Type/EmbeddedFile/Length 100>>\nstream\nmalicious binary data\nendstream\nendobj\n",
 			expectError: true,
+			errorType:   ErrEmbeddedFileDetected,
 			description: "PDF with embedded file should be rejected",
 		},
 		{
