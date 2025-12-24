@@ -120,8 +120,12 @@ func Check(data []byte) error {
 
 // checkForJavaScript detects JavaScript content in PDF
 func checkForJavaScript(content string) error {
+	// Remove stream bodies first to avoid matching binary data inside streams (Flate/JPX/etc.)
+	streamRx := regexp.MustCompile(`(?is)stream\b.*?endstream`)
+	contentNoStreams := streamRx.ReplaceAllString(content, " ")
+
 	// Normalize whitespace to reduce obfuscation via spacing
-	normalized := whitespaceRegex.ReplaceAllString(content, " ")
+	normalized := whitespaceRegex.ReplaceAllString(contentNoStreams, " ")
 
 	for _, rx := range jsPatterns {
 		if rx.MatchString(normalized) {
@@ -129,22 +133,22 @@ func checkForJavaScript(content string) error {
 		}
 	}
 
-	// Detect hex-encoded JS fragments (#...) and look for nearby JS markers
-	locs := jsHexRx.FindAllStringIndex(content, -1)
+	// Detect hex-encoded JS fragments (#...) and look for nearby JS markers outside streams
+	locs := jsHexRx.FindAllStringIndex(contentNoStreams, -1)
 	for _, loc := range locs {
 		start := loc[0]
 		from := start - 80
 		if from < 0 {
 			from = 0
 		}
-		ctx := content[from:start]
+		ctx := contentNoStreams[from:start]
 		if jsWordRegex.MatchString(ctx) {
 			return ErrJavaScriptDetected
 		}
 	}
 
-	// Angle-bracket hex objects + presence of JS tokens
-	if jsHexAngle.MatchString(content) && jsWordRegex.MatchString(content) {
+	// Angle-bracket hex objects + presence of JS tokens (outside streams)
+	if jsHexAngle.MatchString(contentNoStreams) && jsWordRegex.MatchString(contentNoStreams) {
 		return ErrJavaScriptDetected
 	}
 
