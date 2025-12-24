@@ -68,14 +68,6 @@ var (
 		regexp.MustCompile(`(?i)/\s*FileAttachment`),
 		regexp.MustCompile(`(?i)/\s*Filespec`),
 	}
-
-	jsRemovalRegexes = []*regexp.Regexp{
-		// Remove common JavaScript markers and simple JS() contents
-		regexp.MustCompile(`(?i)/\s*S\s*/\s*JavaScript`),
-		regexp.MustCompile(`(?is)/\s*JS\s*\([^)]*\)`),
-		regexp.MustCompile(`(?i)/\s*JS`),
-		regexp.MustCompile(`(?i)/\s*OpenAction`),
-	}
 )
 
 // Check performs comprehensive security validation on PDF content
